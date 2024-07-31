@@ -1,69 +1,66 @@
+#include <QTcpServer>
+#include <QTcpSocket>
 #include <QCoreApplication>
-#include <QModbusTcpServer>
-#include <QModbusDataUnit>
 #include <QDebug>
-#include <QHostAddress>
 
-class ModbusServer : public QObject
-{
+struct Point {
+    double x;
+    double y;
+};
+
+class Server : public QObject {
     Q_OBJECT
 
 public:
-    ModbusServer(QObject *parent = nullptr) : QObject(parent)
-    {
-        server = new QModbusTcpServer(this);
+    Server(QObject* parent = nullptr) : QObject(parent) {
+        connect(&m_server, &QTcpServer::newConnection, this, &Server::onNewConnection);
+    }
 
-        // Настройка карты регистров
-        QModbusDataUnitMap reg;
-        reg.insert(QModbusDataUnit::HoldingRegisters, {QModbusDataUnit::HoldingRegisters, 0, 10});
-        server->setMap(reg);
-
-        connect(server, &QModbusServer::dataWritten, this, &ModbusServer::onDataWritten);
-
-        server->setConnectionParameter(QModbusDevice::NetworkAddressParameter, QHostAddress(QHostAddress::LocalHost).toString());
-        server->setConnectionParameter(QModbusDevice::NetworkPortParameter, 502);
-
-        if (!server->connectDevice()) {
-            qDebug() << "Server failed to start:" << server->errorString();
-        } else {
-            qDebug() << "Server is listening on port 502";
+    bool start(quint16 port) {
+        if (!m_server.listen(QHostAddress::Any, port)) {
+            qCritical() << "Failed to start server:" << m_server.errorString();
+            return false;
         }
+        qInfo() << "Server started, listening on port" << port;
+        return true;
     }
 
 private slots:
-    void onDataWritten(QModbusDataUnit::RegisterType type, int address, int size)
-    {
-        if (type == QModbusDataUnit::HoldingRegisters && address == 0 && size == 2) {
-            QModbusDataUnit unit(QModbusDataUnit::HoldingRegisters, 0, 2);
-            if (server->data(&unit)) {
-                double x = static_cast<double>(unit.value(0)) / 1000.0;
-                double y = static_cast<double>(unit.value(1)) / 1000.0;
+    void onNewConnection() {
+        QTcpSocket* socket = m_server.nextPendingConnection();
+        connect(socket, &QTcpSocket::readyRead, this, [this, socket]() {
+            processData(socket);
+        });
+        connect(socket, &QTcpSocket::disconnected, socket, &QTcpSocket::deleteLater);
+    }
 
-                qDebug() << "Received data:" << x << y;
+    void processData(QTcpSocket* socket) {
+        while (socket->bytesAvailable() >= sizeof(Point) * 2) {
+            Point points[2];
+            socket->read(reinterpret_cast<char*>(&points), sizeof(points));
+            qInfo() << "Received points:" << points[0].x << "," << points[0].y << "and" << points[1].x << "," << points[1].y;
 
-                // Умножаем на 2
-                x *= 2;
-                y *= 2;
+            // Умножаем координаты на 2
+            points[0].x *= 2;
+            points[0].y *= 2;
+            points[1].x *= 2;
+            points[1].y *= 2;
 
-                // Обновляем данные в регистрах
-                unit.setValue(0, static_cast<quint16>(x * 1000));
-                unit.setValue(1, static_cast<quint16>(y * 1000));
-                server->setData(unit);
-
-                qDebug() << "Sent back data:" << x << y;
-            }
+            socket->write(reinterpret_cast<const char*>(&points), sizeof(points));
         }
     }
 
 private:
-    QModbusTcpServer *server;
+    QTcpServer m_server;
 };
 
-int main(int argc, char *argv[])
-{
-    QCoreApplication a(argc, argv);
-    ModbusServer server;
-    return a.exec();
+int main(int argc, char* argv[]) {
+    QCoreApplication app(argc, argv);
+    Server server;
+    if (!server.start(1234)) {
+        return 1;
+    }
+    return app.exec();
 }
 
 #include "main.moc"

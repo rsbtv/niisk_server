@@ -1,8 +1,5 @@
 QT -= gui
-QT += core network serialbus
-
-#TARGET = modbus_server
-TEMPLATE = app
+QT += network
 
 CONFIG += c++11 console
 CONFIG -= app_bundle
